@@ -17,42 +17,81 @@ Once you have created dbw_node, you will update this node to use the status of t
 Please note that our simulator also provides the exact location of traffic lights and their
 current status in `/vehicle/traffic_lights` message. You can use this message to build this node
 as well as to verify your TL classifier.
-
-TODO (for Yousuf and Aaron): Stopline location for each traffic light.
 '''
 
 LOOKAHEAD_WPS = 200 # Number of waypoints we will publish. You can change this number
-
+IGNORE_POSES = 5
 
 class WaypointUpdater(object):
+    pos_waypoints_passed = 0
+    next_waypoints= []
+    poses_ignored = 5
+
     def __init__(self):
         rospy.init_node('waypoint_updater')
 
-        rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
 
-        # TODO: Add a subscriber for /traffic_waypoint and /obstacle_waypoint below
+        rospy.wait_for_message('/base_waypoints', Lane)
+        rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
 
+        # subscriber for /traffic_waypoint and /obstacle_waypoint below
+        # rospy.Subscriber('/traffic_waypoint', Waypoint, self.traffic_cb)
+        # rospy.Subscriber('/obstacle_waypoint', Waypoint, self.obstacle_cb)
 
         self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
 
-        # TODO: Add other member variables you need below
-
+        # keeps the node from exiting until the node has been shutdown.
         rospy.spin()
 
-    def pose_cb(self, msg):
-        # TODO: Implement
-        pass
+    def calculate_next_waypoints(self):
 
-    def waypoints_cb(self, waypoints):
-        # TODO: Implement
-        pass
+        # strip track_waypoints to the path begginning at current_vehicle_pose
+        # first iteration since startup
+        if len(self.next_waypoints) < 1:
+            waypoints = self.track_waypoints_msg.waypoints
+        # re-use list of waypoints cut from CCP
+        else:
+            waypoints = self.track_waypoints_msg.waypoints
+        for i in range(self.pos_waypoints_passed, len(waypoints)):
+            if self.current_vehicle_pose.pose.position.x < waypoints[i].pose.pose.position.x:
+                # Extract first LOOKAHEAD_WPS amount of points starting from CCP
+                self.pos_waypoints_passed = i
+                self.next_waypoints = waypoints[self.pos_waypoints_passed:LOOKAHEAD_WPS+self.pos_waypoints_passed]
+                break
+
+        self.next_waypoints_msg.waypoints = self.next_waypoints[:LOOKAHEAD_WPS]
+
+    def pose_cb(self, msg):
+        self.current_vehicle_pose = msg
+        if len(self.track_waypoints_msg.waypoints) <= 1:
+            rospy.logerr("Unable to publish vehicle path: No track waypoints available")
+        else:
+            # calculate further path using every 5th waypoint.
+            # Rationale: save compitational efforts
+            if self.poses_ignored != IGNORE_POSES:
+                self.poses_ignored +=1
+            else:
+                self.poses_ignored = 0
+                rospy.loginfo("Publishing vehicle path")
+                self.next_waypoints_msg = Lane()
+                self.next_waypoints_msg.header.frame_id = self.track_waypoints_msg.header.frame_id
+                self.next_waypoints_msg.header.stamp = rospy.Time.now()
+                self.calculate_next_waypoints()
+
+                self.final_waypoints_pub.publish(self.next_waypoints_msg)
+
+    def waypoints_cb(self, lane_waypoints):
+        rospy.loginfo("Track Waypoints received")
+        self.track_waypoints_msg = lane_waypoints
 
     def traffic_cb(self, msg):
+        rospy.loginfo("traffic_cb triggered")
         # TODO: Callback for /traffic_waypoint message. Implement
         pass
 
     def obstacle_cb(self, msg):
+        rospy.loginfo("obstacle_cb triggered")
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
         pass
 
