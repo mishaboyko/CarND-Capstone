@@ -86,12 +86,12 @@ class WaypointUpdater(object):
         self.track_waypoints_msg = lane_waypoints
 
     def traffic_cb(self, msg):
-        rospy.loginfo("traffic_cb triggered")
+        rospy.loginfo("traffic_cb not yet implemented")
         # TODO: Callback for /traffic_waypoint message. Implement
         pass
 
     def obstacle_cb(self, msg):
-        rospy.loginfo("obstacle_cb triggered")
+        rospy.loginfo("obstacle_cb not yet implemented")
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
         pass
 
