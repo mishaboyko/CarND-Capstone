@@ -28,7 +28,7 @@ class WaypointUpdater(object):
     poses_ignored = 5
 
     def __init__(self):
-        rospy.init_node('waypoint_updater')
+        rospy.init_node('waypoint_updater', log_level=rospy.INFO)
 
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
 
