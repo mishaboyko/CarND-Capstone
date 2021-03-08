@@ -3,6 +3,7 @@
 import rospy
 from geometry_msgs.msg import PoseStamped
 from styx_msgs.msg import Lane, Waypoint
+from std_msgs.msg import Float64
 
 import math
 
@@ -39,7 +40,8 @@ class WaypointUpdater(object):
         # rospy.Subscriber('/traffic_waypoint', Waypoint, self.traffic_cb)
         # rospy.Subscriber('/obstacle_waypoint', Waypoint, self.obstacle_cb)
 
-        self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
+        self.final_waypoints_pub = rospy.Publisher('/final_waypoints', Lane, queue_size=1)
+        self.cte_pub = rospy.Publisher('/cte', Float64, queue_size=1)
 
         # keeps the node from exiting until the node has been shutdown.
         rospy.spin()
@@ -73,13 +75,14 @@ class WaypointUpdater(object):
                 self.poses_ignored +=1
             else:
                 self.poses_ignored = 0
-                rospy.loginfo("Publishing vehicle path")
                 self.next_waypoints_msg = Lane()
                 self.next_waypoints_msg.header.frame_id = self.track_waypoints_msg.header.frame_id
                 self.next_waypoints_msg.header.stamp = rospy.Time.now()
                 self.calculate_next_waypoints()
 
+                rospy.loginfo("Publishing vehicle path & CTE")
                 self.final_waypoints_pub.publish(self.next_waypoints_msg)
+                self.cte_pub.publish(self.calculate_cte())
 
     def waypoints_cb(self, lane_waypoints):
         rospy.loginfo("Track Waypoints received")
@@ -109,6 +112,8 @@ class WaypointUpdater(object):
             wp1 = i
         return dist
 
+    def calculate_cte(self):
+        return (self.next_waypoints[0].pose.pose.position.y - self.current_vehicle_pose.pose.position.y)
 
 if __name__ == '__main__':
     try:
