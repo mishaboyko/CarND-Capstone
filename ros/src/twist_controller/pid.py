@@ -14,16 +14,14 @@ class PID(object):
         self.kd = kd
         self.min = mn
         self.max = mx
-
         self.int_val = self.last_error = 0.
-        rospy.loginfo("PID successfully initialized")
 
     def reset(self):
         self.int_val = 0.0
 
     def step(self, error, sample_time):
         # error is an Cross-Track-Error
-        # sample_time is a current timestamp ?!
+        # sample_time is a time diff between two measurements
 
         integral = self.int_val + error * sample_time
         derivative = (error - self.last_error) / sample_time
