@@ -3,7 +3,8 @@
 import rospy
 from geometry_msgs.msg import PoseStamped
 from styx_msgs.msg import Lane, Waypoint
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, Int32
+from geometry_msgs.msg import TwistStamped
 
 import math
 
@@ -22,11 +23,16 @@ as well as to verify your TL classifier.
 
 LOOKAHEAD_WPS = 200 # Number of waypoints we will publish. You can change this number
 IGNORE_POSES = 5
+DEACCELERATION_WPS = 50
 
 class WaypointUpdater(object):
+    current_linear_velocity = 0
     pos_waypoints_passed = 0
     next_waypoints= []
     poses_ignored = 5
+
+    next_stop_index = None
+    next_stop_prev_velocity = None
 
     def __init__(self):
         rospy.init_node('waypoint_updater', log_level=rospy.INFO)
@@ -35,10 +41,9 @@ class WaypointUpdater(object):
 
         rospy.wait_for_message('/base_waypoints', Lane)
         rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
-
-        # subscriber for /traffic_waypoint and /obstacle_waypoint below
-        # rospy.Subscriber('/traffic_waypoint', Waypoint, self.traffic_cb)
-        # rospy.Subscriber('/obstacle_waypoint', Waypoint, self.obstacle_cb)
+        rospy.Subscriber('/traffic_waypoint', Int32, self.traffic_cb)
+        rospy.Subscriber('/obstacle_waypoint', Int32, self.obstacle_cb)
+        rospy.Subscriber('/current_velocity', TwistStamped, self.set_current_velocity)
 
         self.final_waypoints_pub = rospy.Publisher('/final_waypoints', Lane, queue_size=1)
         self.cte_pub = rospy.Publisher('/cte', Float64, queue_size=1)
@@ -68,7 +73,7 @@ class WaypointUpdater(object):
                 # Extract first LOOKAHEAD_WPS amount of points starting from CCP
                 self.pos_waypoints_passed = i-1
                 self.next_waypoints = waypoints[self.pos_waypoints_passed:LOOKAHEAD_WPS+self.pos_waypoints_passed]
-                rospy.loginfo("Passed index %s/%s (%s, %s).", i, len(waypoints), \
+                rospy.loginfo("CCP: %s/%s (%s, %s).", i, len(waypoints), \
                                waypoints[i].pose.pose.position.x, waypoints[i].pose.pose.position.y)
                 break
 
@@ -94,18 +99,30 @@ class WaypointUpdater(object):
                 self.cte_pub.publish(self.calculate_cte())
 
     def waypoints_cb(self, lane_waypoints):
-        rospy.loginfo("Track Waypoints received")
         self.track_waypoints_msg = lane_waypoints
 
     def traffic_cb(self, msg):
-        rospy.loginfo("traffic_cb not yet implemented")
-        # TODO: Callback for /traffic_waypoint message. Implement
-        pass
+        stop_line_index = msg.data -1 if msg.data != -1 else len(self.track_waypoints_msg.waypoints)-1
+
+        rospy.loginfo("Upcoming stop: # %s (%s, %s)", stop_line_index, self.track_waypoints_msg.waypoints[stop_line_index].pose.pose.position.x, \
+                                                      self.track_waypoints_msg.waypoints[stop_line_index].pose.pose.position.y)
+
+        if self.next_stop_index != stop_line_index:
+            if self.next_stop_index is not None:
+                self.restore_velocity_to_prev_stop_line()
+            self.next_stop_index = stop_line_index
+            self.next_stop_prev_velocity = self.track_waypoints_msg.waypoints[msg.data].twist.twist.linear.x
+            self.set_velocity_to_next_stop_line(self.next_stop_index)
 
     def obstacle_cb(self, msg):
         rospy.loginfo("obstacle_cb not yet implemented")
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
         pass
+    
+    def set_current_velocity(self, msg):
+        # in m/s
+        self.current_linear_velocity = msg.twist.linear.x
+        #rospy.loginfo("Current velocity :%s", self.current_linear_velocity)
 
     def get_waypoint_velocity(self, waypoint):
         return waypoint.twist.twist.linear.x
@@ -123,6 +140,34 @@ class WaypointUpdater(object):
 
     def calculate_cte(self):
         return (self.next_waypoints[0].pose.pose.position.y - self.current_vehicle_pose.pose.position.y)
+
+    def restore_velocity_to_prev_stop_line(self):
+        rospy.loginfo("restore_velocity_to_prev_stop_line() not yet implemented")
+
+    def set_velocity_to_next_stop_line(self, stop_waypoint_index):
+        # By default use DEACCELERATION_WPS prior to the stop line waypoint for deacceleration.
+        # If vehicle is already closer than DEACCELERATION_WPS to the red TL: use vehicle position for deacceleration start
+        deacceleration_start_index = stop_waypoint_index - DEACCELERATION_WPS
+        deacceleration_start_velocity = self.track_waypoints_msg.waypoints[deacceleration_start_index].twist.twist.linear.x
+        if deacceleration_start_index < self.pos_waypoints_passed:
+            deacceleration_start_index = self.pos_waypoints_passed
+            deacceleration_start_velocity = self.current_linear_velocity
+        self.set_deacceleration_velocities(stop_waypoint_index, deacceleration_start_index, deacceleration_start_velocity)
+
+    def set_deacceleration_velocities(self, stop_waypoint_index, deacceleration_start_index, deacceleration_start_velocity):
+        # simple linear deacceleration
+        rospy.loginfo("Setting velocities to range %s, %s from start_velocity %s", deacceleration_start_index, stop_waypoint_index, deacceleration_start_velocity)
+        deacceleration_koefficient = deacceleration_start_velocity/DEACCELERATION_WPS
+        deacc_wp = DEACCELERATION_WPS
+
+        for i in reversed(range(deacceleration_start_index, stop_waypoint_index)):
+            velocity = deacceleration_start_velocity-(deacc_wp*deacceleration_koefficient)
+            if velocity < 0.4:
+                # set -1 to the last waypoint in order to generate 700 Nm torque and prevent Carla from moving
+                velocity = -1
+            self.set_waypoint_velocity(self.track_waypoints_msg.waypoints, i, velocity)
+            deacc_wp -=1
+            rospy.loginfo("Deacceleration velocity %s for index %s", self.track_waypoints_msg.waypoints[i].twist.twist.linear.x, i)
 
 if __name__ == '__main__':
     try:
