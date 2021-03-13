@@ -46,23 +46,33 @@ class WaypointUpdater(object):
         # keeps the node from exiting until the node has been shutdown.
         rospy.spin()
 
-    def calculate_next_waypoints(self):
+    def euclidean_distance(self, x1, y1, x2, y2):
+        return math.sqrt(pow((x2 - x1), 2) + pow((y2 - y1), 2))
 
+    def calculate_next_waypoints(self):
         # strip track_waypoints to the path begginning at current_vehicle_pose
         # first iteration since startup
+        prev_wp_distance = 99999
         if len(self.next_waypoints) < 1:
             waypoints = self.track_waypoints_msg.waypoints
         # re-use list of waypoints cut from CCP
         else:
             waypoints = self.track_waypoints_msg.waypoints
         for i in range(self.pos_waypoints_passed, len(waypoints)):
-            if self.current_vehicle_pose.pose.position.x < waypoints[i].pose.pose.position.x:
+            i_distance = self.euclidean_distance(self.current_vehicle_pose.pose.position.x, self.current_vehicle_pose.pose.position.y, \
+                                                 waypoints[i].pose.pose.position.x, waypoints[i].pose.pose.position.y)
+            if i_distance < prev_wp_distance:
+                prev_wp_distance = i_distance
+            # Local minima reached
+            elif i_distance > prev_wp_distance:
                 # Extract first LOOKAHEAD_WPS amount of points starting from CCP
-                self.pos_waypoints_passed = i
+                self.pos_waypoints_passed = i-1
                 self.next_waypoints = waypoints[self.pos_waypoints_passed:LOOKAHEAD_WPS+self.pos_waypoints_passed]
+                rospy.loginfo("Passed index %s/%s (%s, %s).", i, len(waypoints), \
+                               waypoints[i].pose.pose.position.x, waypoints[i].pose.pose.position.y)
                 break
 
-        self.next_waypoints_msg.waypoints = self.next_waypoints[:LOOKAHEAD_WPS]
+        self.next_waypoints_msg.waypoints = self.next_waypoints
 
     def pose_cb(self, msg):
         self.current_vehicle_pose = msg
@@ -80,7 +90,6 @@ class WaypointUpdater(object):
                 self.next_waypoints_msg.header.stamp = rospy.Time.now()
                 self.calculate_next_waypoints()
 
-                rospy.loginfo("Publishing vehicle path & CTE")
                 self.final_waypoints_pub.publish(self.next_waypoints_msg)
                 self.cte_pub.publish(self.calculate_cte())
 
