@@ -75,8 +75,6 @@ class TLDetector(object):
         """
         self.has_image = True
         self.camera_image = msg
-
-        rospy.loginfo("Image received")
         light_wp, state = self.process_traffic_lights()
 
         '''
@@ -147,18 +145,16 @@ class TLDetector(object):
                 continue
             dist = self.euclidean_distance(self.traffic_lights[i].pose.pose.position.x, self.traffic_lights[i].pose.pose.position.y, \
                                  self.pose.pose.position.x, self.pose.pose.position.y)
-            rospy.loginfo("dist_to_tl for TL %s: %s", i, dist)
 
             if dist < dist_to_tl:
                 dist_to_tl = dist
                 closest_traffic_light = self.traffic_lights[i]
                 # do not consider the TL anymore if we've passed it
                 if dist < 4.0:
-                    rospy.loginfo("Index %s", i)
                     self.passed_traffic_light_indexes.append(i)
-        rospy.loginfo("Chosen: (%s, %s), dist: %s", \
-                      closest_traffic_light.pose.pose.position.x, closest_traffic_light.pose.pose.position.y, \
-                      dist_to_tl)
+                    # rospy.loginfo("Chosen: (%s, %s), dist: %s", \
+                    #   closest_traffic_light.pose.pose.position.x, closest_traffic_light.pose.pose.position.y, \
+                    #   dist_to_tl)
         return closest_traffic_light
 
     def get_light_state(self, light):
