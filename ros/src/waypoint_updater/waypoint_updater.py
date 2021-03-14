@@ -47,6 +47,7 @@ class WaypointUpdater(object):
 
         self.final_waypoints_pub = rospy.Publisher('/final_waypoints', Lane, queue_size=1)
         self.cte_pub = rospy.Publisher('/cte', Float64, queue_size=1)
+        self.ccp_wp_index_pub = rospy.Publisher('/ccp_wp_index', Int32, queue_size=1)
 
         # keeps the node from exiting until the node has been shutdown.
         rospy.spin()
@@ -96,6 +97,7 @@ class WaypointUpdater(object):
 
                 self.final_waypoints_pub.publish(self.next_waypoints_msg)
                 self.cte_pub.publish(self.calculate_cte())
+                self.ccp_wp_index_pub.publish(self.pos_waypoints_passed+1)
 
     def waypoints_cb(self, lane_waypoints):
         self.track_waypoints_msg = lane_waypoints

@@ -13,6 +13,9 @@ import yaml
 import math
 
 STATE_COUNT_THRESHOLD = 3
+ACTIVATE_TL_CLASSIFIER_RANGE = 100
+EXPORT_DIR='/home/backups/'
+SKIP_IMAGES_THRESHOLD = 0
 
 class TLDetector(object):
     def __init__(self):
@@ -21,6 +24,7 @@ class TLDetector(object):
         self.pose = None
         self.waypoints = None
         self.camera_image = None
+        self.ccp_wp_index = None
         self.traffic_lights = []
         self.passed_traffic_light_indexes =[]
 
@@ -41,8 +45,13 @@ class TLDetector(object):
         sub3 = rospy.Subscriber('/vehicle/traffic_lights', TrafficLightArray, self.traffic_cb)
         sub6 = rospy.Subscriber('/image_color', Image, self.image_cb)
 
+        ccp_wp_index_subscriber = rospy.Subscriber('/ccp_wp_index', Int32, self.ccp_wp_index_cb)
+
         config_string = rospy.get_param("/traffic_light_config")
         self.config = yaml.load(config_string)
+
+        # List of positions that correspond to the line to stop in front of for a given intersection
+        self.stop_line_positions = self.config['stop_line_positions']
 
         self.upcoming_red_light_pub = rospy.Publisher('/traffic_waypoint', Int32, queue_size=1)
 
@@ -54,13 +63,19 @@ class TLDetector(object):
         self.last_state = TrafficLight.UNKNOWN
         self.last_wp = -1
         self.state_count = 0
+        self.skip_images_cnt = SKIP_IMAGES_THRESHOLD
+        self.images_counter = 0
+
 
         rospy.spin()
 
     def pose_cb(self, msg):
         self.pose = msg
+
     def waypoints_cb(self, lane_msg):
         self.waypoints = lane_msg.waypoints
+        self.stop_line_wps = self.get_stopline_waypoints()
+
 
     def traffic_cb(self, msg):
         self.traffic_lights = msg.lights
@@ -96,6 +111,33 @@ class TLDetector(object):
             self.upcoming_red_light_pub.publish(Int32(self.last_wp))
         self.state_count += 1
 
+    def ccp_wp_index_cb(self, msg):
+        self.ccp_wp_index = msg.data
+
+    def get_stopline_waypoints(self):
+        """Helper function which returns set the waypoint indexes
+        for all stoplines in the track.
+        This is then used to start TL color classification only within those regions,
+        where the TLs are visible from CCP.
+
+        Returns:
+            List of all waypoint indexes of the traffic lights on the whole track
+        """
+        all_stopline_wps = []
+        for stop_line in self.stop_line_positions:
+            min_dist_to_stopline_wp = 999999
+            stopline_index = 999999
+            for waypoint_index in range(len(self.waypoints)):
+                next_distance = self.euclidean_distance(stop_line[0], stop_line[1], \
+                                                        self.waypoints[waypoint_index].pose.pose.position.x, \
+                                                        self.waypoints[waypoint_index].pose.pose.position.y)
+                if next_distance < min_dist_to_stopline_wp:
+                    stopline_index = waypoint_index
+                    min_dist_to_stopline_wp = next_distance
+            rospy.loginfo("Stop line (%s, %s,) index %s", stop_line[0], stop_line[1], stopline_index)
+            all_stopline_wps.append(stopline_index)
+        return all_stopline_wps
+
     def euclidean_distance(self, x1, y1, x2, y2):
         return math.sqrt(pow((x2 - x1), 2) + pow((y2 - y1), 2))
 
@@ -114,20 +156,19 @@ class TLDetector(object):
                 # the loop passed the waypoint, no need to iterate further
                 break
 
-
-    def get_next_stop_line(self, stop_line_positions, next_traffic_light):
+    def get_next_stop_line(self, next_traffic_light):
         related_stopline = None
         # Assumpition: stopline coordinates come before traffic light coordinates
         dist_to_stopline = 9999999
-        for i in range(len(stop_line_positions)):
-            dist = self.euclidean_distance(stop_line_positions[i][0], stop_line_positions[i][1], \
+        for i in range(len(self.stop_line_positions)):
+            dist = self.euclidean_distance(self.stop_line_positions[i][0], self.stop_line_positions[i][1], \
                                            next_traffic_light.pose.pose.position.x, next_traffic_light.pose.pose.position.y)
             if dist < dist_to_stopline:
-                related_stopline = stop_line_positions[i]
+                related_stopline = self.stop_line_positions[i]
                 dist_to_stopline = dist
         return related_stopline
 
-    def get_upcomming_traffic_light(self):
+    def get_upcoming_traffic_light(self):
         """Identifies the closest traffic light ahead of the the given position
             https://en.wikipedia.org/wiki/Closest_pair_of_points_problem
         Args:
@@ -138,6 +179,12 @@ class TLDetector(object):
         """
         closest_traffic_light = None
         dist_to_tl = 9999999
+
+        # vehicle has passed last traffic light on the track. Reset values
+        # Assumption: every TL has exectly 1 stop line and all SL in the config are valid
+        if len(self.passed_traffic_light_indexes) >= len(self.stop_line_positions):
+            rospy.logwarn("have passed last traffic light. Re-setting passed_traffic_light_indexes")
+            self.passed_traffic_light_indexes = []
 
         # List of TLs behind the vehicle. First one is ignored by default, cause it is considered before entering the loop.
         for i in range(len(self.traffic_lights)):
@@ -157,6 +204,32 @@ class TLDetector(object):
                     #   dist_to_tl)
         return closest_traffic_light
 
+    def process_image(self, cv_image, tl_light_state):
+        """Helper function to:
+        - export images that are close to the upcoming TL
+            in order to use them for training the TL classifier
+        - classify images that are close to the upcoming TL
+        Range:
+        -ACTIVATE_TL_CLASSIFIER_RANGE____CCP____+10
+
+        Args:
+            tl_light_state (State of the TrafficLight): used to:
+                - label the image for classifier
+                - double-check the correctness of the classifier
+
+        """
+        rospy.loginfo("CCP index: %s/%s", self.ccp_wp_index, len(self.waypoints))
+        for stop_line_wp in self.stop_line_wps:
+            if stop_line_wp-ACTIVATE_TL_CLASSIFIER_RANGE <= self.ccp_wp_index < stop_line_wp+10:
+                filename = "tl_{}_state{}_frame_{}.jpg".format(stop_line_wp, tl_light_state, self.images_counter)
+                self.images_counter +=1
+                cv2.imwrite(EXPORT_DIR+filename, cv_image)
+
+                #Get classification
+                #tl_state = return self.light_classifier.get_classification(cv_image)
+        tl_state = 0
+        return tl_state
+
     def get_light_state(self, light):
         """Determines the current color of the traffic light
 
@@ -173,9 +246,8 @@ class TLDetector(object):
 
         cv_image = self.bridge.imgmsg_to_cv2(self.camera_image, "bgr8")
 
-        #Get classification
-        #return self.light_classifier.get_classification(cv_image)
-        return light.state
+        tl_color = self.process_image(cv_image, light.state)
+        return tl_color
 
     def process_traffic_lights(self):
         """Finds closest visible traffic light, if one exists, and determines its
@@ -188,24 +260,28 @@ class TLDetector(object):
         """
         next_traffic_light = None
 
-        # List of positions that correspond to the line to stop in front of for a given intersection
-        stop_line_positions = self.config['stop_line_positions']
         if(self.pose):
-            next_traffic_light = self.get_upcomming_traffic_light()
+            next_traffic_light = self.get_upcoming_traffic_light()
 
-            # use x coordinate only for simplicity
-            next_stop_line_coord = self.get_next_stop_line(stop_line_positions, next_traffic_light)
+            next_stop_line_coord = self.get_next_stop_line(next_traffic_light)
             self.update_waypoint_index(next_stop_line_coord)
 
-            rospy.loginfo("from ccp (%s, %s) closest TL (%s, %s) and stopline (%s, %s) indicates light %s", \
-                          self.pose.pose.position.x, self.pose.pose.position.y, \
-                          next_traffic_light.pose.pose.position.x, next_traffic_light.pose.pose.position.y, \
-                          next_stop_line_coord[0], next_stop_line_coord[1], \
-                          next_traffic_light.state)
-            rospy.loginfo("Waypoint index of this stopline is %s/%s", self.last_stopline_index, len(self.waypoints))
+            # rospy.loginfo("from ccp (%s, %s) closest TL (%s, %s) and stopline (%s, %s) indicates light %s", \
+            #               self.pose.pose.position.x, self.pose.pose.position.y, \
+            #               next_traffic_light.pose.pose.position.x, next_traffic_light.pose.pose.position.y, \
+            #               next_stop_line_coord[0], next_stop_line_coord[1], \
+            #               next_traffic_light.state)
+            rospy.loginfo("Next stopline index: %s/%s", self.last_stopline_index, len(self.waypoints))
+
+            # process every SKIP_IMAGES_CNT image
+            if self.skip_images_cnt == SKIP_IMAGES_THRESHOLD:
+                classified_tl_state = self.get_light_state(next_traffic_light)
+                self.skip_images_cnt = 0
+            else:
+                self.skip_images_cnt +=1
 
         if next_traffic_light:
-            state = self.get_light_state(next_traffic_light)
+            state = next_traffic_light.state
             return self.last_stopline_index, state
         # Why would you invalidate all the waypoints forever just because of the missing TL?
         #self.waypoints = None
