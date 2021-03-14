@@ -15,6 +15,7 @@ class PID(object):
         self.min = mn
         self.max = mx
         self.int_val = self.last_error = 0.
+        self.prev_sample_time = 0
 
     def reset(self):
         self.int_val = 0.0
@@ -22,6 +23,11 @@ class PID(object):
     def step(self, error, sample_time):
         # error is an Cross-Track-Error
         # sample_time is a time diff between two measurements
+
+        # prevent division by 0
+        if sample_time == 0.0:
+            sample_time = self.prev_sample_time
+        self.prev_sample_time = sample_time
 
         integral = self.int_val + error * sample_time
         derivative = (error - self.last_error) / sample_time

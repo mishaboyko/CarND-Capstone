@@ -2,8 +2,7 @@
 import rospy
 from std_msgs.msg import Int32
 from geometry_msgs.msg import PoseStamped, Pose
-from styx_msgs.msg import TrafficLightArray, TrafficLight
-from styx_msgs.msg import Lane
+from styx_msgs.msg import TrafficLightArray, TrafficLight, Lane
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from light_classification.tl_classifier import TLClassifier
@@ -15,7 +14,7 @@ import math
 STATE_COUNT_THRESHOLD = 3
 ACTIVATE_TL_CLASSIFIER_RANGE = 100
 EXPORT_DIR='/home/backups/'
-SKIP_IMAGES_THRESHOLD = 0
+SKIP_IMAGES_THRESHOLD = 2
 
 class TLDetector(object):
     def __init__(self):
@@ -27,6 +26,7 @@ class TLDetector(object):
         self.ccp_wp_index = None
         self.traffic_lights = []
         self.passed_traffic_light_indexes =[]
+        self.classified_tl_state = 0
 
         # An index of the waypoint within self.waypoints which is closest to the CCP.
         # Rationale: do not loop through waypoints the vehicle has passed.
@@ -218,16 +218,18 @@ class TLDetector(object):
                 - double-check the correctness of the classifier
 
         """
+        tl_state = 0
         rospy.loginfo("CCP index: %s/%s", self.ccp_wp_index, len(self.waypoints))
         for stop_line_wp in self.stop_line_wps:
             if stop_line_wp-ACTIVATE_TL_CLASSIFIER_RANGE <= self.ccp_wp_index < stop_line_wp+10:
-                filename = "tl_{}_state{}_frame_{}.jpg".format(stop_line_wp, tl_light_state, self.images_counter)
+
+                # Uncomment this to store images on the Filesystem for later training and testing
+                filename = "tl_{}_state{}_frame_{}.png".format(stop_line_wp, tl_light_state, self.images_counter)
                 self.images_counter +=1
                 cv2.imwrite(EXPORT_DIR+filename, cv_image)
 
-                #Get classification
-                #tl_state = return self.light_classifier.get_classification(cv_image)
-        tl_state = 0
+                # Get classification
+                tl_state = self.light_classifier.get_classification(cv_image)
         return tl_state
 
     def get_light_state(self, light):
@@ -275,14 +277,14 @@ class TLDetector(object):
 
             # process every SKIP_IMAGES_CNT image
             if self.skip_images_cnt == SKIP_IMAGES_THRESHOLD:
-                classified_tl_state = self.get_light_state(next_traffic_light)
+                self.classified_tl_state = self.get_light_state(next_traffic_light)
                 self.skip_images_cnt = 0
             else:
                 self.skip_images_cnt +=1
 
         if next_traffic_light:
-            state = next_traffic_light.state
-            return self.last_stopline_index, state
+            # self.classified_tl_state = next_traffic_light.state
+            return self.last_stopline_index, self.classified_tl_state
         # Why would you invalidate all the waypoints forever just because of the missing TL?
         #self.waypoints = None
         return -1, TrafficLight.UNKNOWN

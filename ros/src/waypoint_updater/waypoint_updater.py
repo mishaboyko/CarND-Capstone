@@ -103,16 +103,16 @@ class WaypointUpdater(object):
         self.track_waypoints_msg = lane_waypoints
 
     def traffic_cb(self, msg):
-        stop_line_index = msg.data -1 if msg.data != -1 else len(self.track_waypoints_msg.waypoints)-1
-
-        if self.next_stop_index != stop_line_index:
-            # rospy.loginfo("Upcoming stop: # %s (%s, %s)", stop_line_index, \
-            #               self.track_waypoints_msg.waypoints[stop_line_index].pose.pose.position.x, \
-            #               self.track_waypoints_msg.waypoints[stop_line_index].pose.pose.position.y)
+        safe_distance_to_stop_line = 5
+        stop_index = msg.data - safe_distance_to_stop_line if msg.data != -1 else len(self.track_waypoints_msg.waypoints)-1
+        if self.next_stop_index != stop_index:
+            # rospy.loginfo("Upcoming stop: # %s (%s, %s)", stop_index, \
+            #               self.track_waypoints_msg.waypoints[stop_index].pose.pose.position.x, \
+            #               self.track_waypoints_msg.waypoints[stop_index].pose.pose.position.y)
             if self.next_stop_index is not None:
                 self.restore_velocity_to_prev_stop_line()
-            self.next_stop_index = stop_line_index
-            self.next_stop_prev_velocity = self.track_waypoints_msg.waypoints[msg.data].twist.twist.linear.x
+            self.next_stop_index = stop_index
+            self.next_stop_prev_velocity = self.track_waypoints_msg.waypoints[stop_index].twist.twist.linear.x
             self.set_velocity_to_next_stop_line(self.next_stop_index)
 
     def obstacle_cb(self, msg):
