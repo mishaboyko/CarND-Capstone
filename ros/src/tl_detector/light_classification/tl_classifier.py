@@ -16,8 +16,8 @@ class TLClassifier(object):
         self.threshold = 0.3
 
         inference_graph_path = MODEL_PATH + "model/frozen_inference_graph_well-trained.pb"
-        # uncomment line below to when doing real-live testing
-        inference_graph_path = MODEL_PATH + "model/frozen_inference_graph_site.pb"
+        # uncomment line below when doing on-site or ROS Bag testing
+        # inference_graph_path = MODEL_PATH + "model/frozen_inference_graph_site.pb"
 
         self.detection_graph = tf.Graph()
 
